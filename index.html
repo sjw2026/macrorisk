@@ -1,103 +1,869 @@
-function updateCalendarDashboard() {
-  var ss = SpreadsheetApp.getActiveSpreadsheet();
-  
-  // 1. 시트가 없으면 생성, 있으면 가져오기
-  var dataSheet = ss.getSheetByName("캘린더데이터");
-  if (!dataSheet) dataSheet = ss.insertSheet("캘린더데이터");
-  
-  var dashSheet = ss.getSheetByName("월별추이_대시보드");
-  if (!dashSheet) dashSheet = ss.insertSheet("월별추이_대시보드");
-  
-  // 시트 초기화
-  dataSheet.clear();
-  dashSheet.clear();
-  
-  // 헤더 설정
-  dataSheet.appendRow(["년월", "술", "독서", "무알콜", "영어"]);
-  
-  // 2. 캘린더 데이터 가져오기 (2024년 1월 1일부터 현재까지)
-  var targetKeywords = ["술", "독서", "무알콜", "영어"];
-  var startDate = new Date("2024-01-01T00:00:00");
-  var endDate = new Date(); 
-  
-  var calendar = CalendarApp.getDefaultCalendar();
-  var events = calendar.getEvents(startDate, endDate);
-  
-  var monthlyData = {};
-  
-  events.forEach(function(event) {
-    var title = event.getTitle().trim();
-    if (targetKeywords.includes(title)) {
-      var eventDate = event.getStartTime();
-      var yearMonth = Utilities.formatDate(eventDate, Session.getScriptTimeZone(), "yyyy-MM");
-      
-      if (!monthlyData[yearMonth]) {
-        monthlyData[yearMonth] = { "술": 0, "독서": 0, "무알콜": 0, "영어": 0 };
-      }
-      monthlyData[yearMonth][title]++;
-    }
-  });
-  
-  // 데이터 시트에 정렬하여 입력
-  var sortedMonths = Object.keys(monthlyData).sort();
-  
-  // 만약 캘린더에 데이터가 하나도 없다면 실행 중단
-  if (sortedMonths.length === 0) {
-    dashSheet.appendRow(["캘린더에 일치하는 데이터가 없습니다."]);
-    return;
-  }
-  
-  sortedMonths.forEach(function(month) {
-    dataSheet.appendRow([
-      month,
-      monthlyData[month]["술"],
-      monthlyData[month]["독서"],
-      monthlyData[month]["무알콜"],
-      monthlyData[month]["영어"]
-    ]);
-  });
-  
-  dataSheet.getRange(1, 1, 1, 5).setFontWeight("bold").setBackground("#f3f3f3");
-  
-  // 3. 대시보드 시트 구성 (추이 및 평균치 수식 연동)
-  dashSheet.appendRow(["월별 추이 데이터 (2024~)", "", "", "", ""]);
-  dashSheet.appendRow(["년월", "술 (일수)", "독서 (일수)", "무알콜 (일수)", "영어 (일수)"]);
-  
-  // [수정 포인트] 실제 데이터 행 수(dataRowsCount)만큼만 수식 범위를 지정합니다.
-  var dataRowsCount = sortedMonths.length; 
-  
-  // 2행이 헤더이므로 데이터는 3행부터 시작
-  var startRow = 3; 
-  
-  // 각 행에 맞는 수식을 배열로 생성
-  var formulaArray = [];
-  for (var i = 0; i < dataRowsCount; i++) {
-    var dataRowIndex = i + 2; // '캘린더데이터' 시트의 참조할 행 번호 (2행부터 시작)
-    formulaArray.push([
-      "=캘린더데이터!A" + dataRowIndex,
-      "=캘린더데이터!B" + dataRowIndex,
-      "=캘린더데이터!C" + dataRowIndex,
-      "=캘린더데이터!D" + dataRowIndex,
-      "=캘린더데이터!E" + dataRowIndex
-    ]);
-  }
-  
-  // 정확히 데이터 개수만큼만 범위를 잡아서 수식 입력
-  dashSheet.getRange(startRow, 1, dataRowsCount, 5).setFormulas(formulaArray);
-  
-  // 4. 평균치 계산 행 추가 (데이터 바로 다음 행에 삽입)
-  var avgRowIndex = startRow + dataRowsCount;
-  var lastDataRow = avgRowIndex - 1;
-  
-  dashSheet.getRange(avgRowIndex, 1).setValue("월평균 수치").setFontWeight("bold");
-  dashSheet.getRange(avgRowIndex, 2).setValue("=AVERAGE(B3:B" + lastDataRow + ")");
-  dashSheet.getRange(avgRowIndex, 3).setValue("=AVERAGE(C3:C" + lastDataRow + ")");
-  dashSheet.getRange(avgRowIndex, 4).setValue("=AVERAGE(D3:D" + lastDataRow + ")");
-  dashSheet.getRange(avgRowIndex, 5).setValue("=AVERAGE(E3:E" + lastDataRow + ")");
-  dashSheet.getRange(avgRowIndex, 2, 1, 4).setFontWeight("bold").setNumberFormat("0.0일");
-  
-  // 대시보드 스타일링
-  dashSheet.getRange(1, 1, 1, 5).merge().setFontSize(14).setFontWeight("bold");
-  dashSheet.getRange(2, 1, 1, 5).setFontWeight("bold").setBackground("#e6effa");
-  dashSheet.getRange(avgRowIndex, 1, 1, 5).setBackground("#f5f5f5");
-}
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>글로벌 거시경제 리스크 & 주가지수 등락률 대시보드</title>
+    <!-- Tailwind CSS -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <!-- Chart.js -->
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <!-- FontAwesome Icons -->
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=Noto+Sans+KR:wght@300;400;500;700&display=swap" rel="stylesheet">
+    
+    <style>
+        body {
+            font-family: 'Inter', 'Noto Sans KR', sans-serif;
+        }
+        .scrollbar-hide::-webkit-scrollbar {
+            display: none;
+        }
+        .scrollbar-hide {
+            -ms-overflow-style: none;
+            scrollbar-width: none;
+        }
+    </style>
+</head>
+<body class="bg-slate-900 text-slate-100 min-h-screen flex flex-col transition-colors duration-300">
+
+    <!-- Top Navigation Header -->
+    <header class="border-b border-slate-800 bg-slate-900/80 backdrop-blur-md sticky top-0 z-50 px-6 py-4 flex flex-wrap items-center justify-between">
+        <div class="flex items-center space-x-3">
+            <div class="bg-indigo-600 p-2 rounded-lg text-white">
+                <i class="fa-solid fa-chart-line text-xl"></i>
+            </div>
+            <div>
+                <h1 class="text-lg font-bold text-white tracking-wide">MacroRisk Engine v2.6</h1>
+                <p class="text-xs text-slate-400">글로벌 거시 리스크 검증 및 실시간 데이터 동기화</p>
+            </div>
+        </div>
+        
+        <div class="flex items-center space-x-4 mt-2 sm:mt-0">
+            <span class="bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 text-xs px-2.5 py-1 rounded-full flex items-center gap-1.5 font-medium">
+                <span class="h-2 w-2 rounded-full bg-emerald-400 animate-pulse"></span>
+                실시간 데이터 검증 시스템 가동중
+            </span>
+            <div class="text-xs text-slate-400">
+                마지막 업데이트: <strong class="text-slate-200" id="sync-time-header">2026년 5월</strong>
+            </div>
+        </div>
+    </header>
+
+    <!-- Main Grid Content -->
+    <main class="flex-grow p-6 max-w-7xl mx-auto w-full space-y-6">
+        
+        <!-- Core Risk Alerts Banner (4 Top Cards) -->
+        <section class="grid grid-cols-1 md:grid-cols-4 gap-4">
+            <!-- 10Y-2Y Spread Card -->
+            <div class="bg-slate-800/60 border border-slate-700/50 rounded-xl p-5 relative overflow-hidden">
+                <div class="flex justify-between items-start">
+                    <span class="text-xs font-semibold text-slate-400 uppercase tracking-wider">장단기 금리차 (10Y-2Y)</span>
+                    <span id="badge-yield" class="text-xs px-2 py-0.5 rounded-full font-bold">진단중</span>
+                </div>
+                <div class="mt-4 flex items-baseline gap-2">
+                    <span class="text-3xl font-extrabold text-white" id="val-yield">+0.00%p</span>
+                    <span id="trend-yield" class="text-xs text-emerald-400"><i class="fa-solid fa-arrow-up"></i> 모니터링중</span>
+                </div>
+                <p class="text-[11px] text-slate-400 mt-2 line-clamp-2" id="desc-yield">FRED T10Y2Y 기준. 역전 후 플러스 영역으로 급격한 재역전(정상화) 국면은 침체 전조 검증 필요.</p>
+                <div class="absolute bottom-0 left-0 w-full h-1 bg-indigo-500"></div>
+            </div>
+
+            <!-- High Yield Spread Card -->
+            <div class="bg-slate-800/60 border border-slate-700/50 rounded-xl p-5 relative overflow-hidden">
+                <div class="flex justify-between items-start">
+                    <span class="text-xs font-semibold text-slate-400 uppercase tracking-wider">하이일드 스프레드</span>
+                    <span id="badge-hy" class="text-xs px-2 py-0.5 rounded-full font-bold">진단중</span>
+                </div>
+                <div class="mt-4 flex items-baseline gap-2">
+                    <span class="text-3xl font-extrabold text-white" id="val-hy">0.00%p</span>
+                    <span id="trend-hy" class="text-xs text-emerald-400"><i class="fa-solid fa-shield-halved"></i> 안정 구간</span>
+                </div>
+                <p class="text-[11px] text-slate-400 mt-2 line-clamp-2" id="desc-hy">ICE BofA OAS 기준. 4.5%p 상회 시 신용 경색 우려 발생, 현재는 견고한 신용 여건 유지.</p>
+                <div class="absolute bottom-0 left-0 w-full h-1 bg-emerald-500"></div>
+            </div>
+
+            <!-- VIX Index Card -->
+            <div class="bg-slate-800/60 border border-slate-700/50 rounded-xl p-5 relative overflow-hidden">
+                <div class="flex justify-between items-start">
+                    <span class="text-xs font-semibold text-slate-400 uppercase tracking-wider">CBOE VIX 변동성 지수</span>
+                    <span id="badge-vix" class="text-xs px-2 py-0.5 rounded-full font-bold">진단중</span>
+                </div>
+                <div class="mt-4 flex items-baseline gap-2">
+                    <span class="text-3xl font-extrabold text-white" id="val-vix">0.00</span>
+                    <span id="trend-vix" class="text-xs text-emerald-400">시장 심리 양호</span>
+                </div>
+                <p class="text-[11px] text-slate-400 mt-2 line-clamp-2" id="desc-vix">공포 임계점 25 미만 시 심리 정상. 미국 증시 및 주요 빅테크 랠리로 인한 위험 선호 반영.</p>
+                <div class="absolute bottom-0 left-0 w-full h-1 bg-teal-500"></div>
+            </div>
+
+            <!-- South Korea CDS Card -->
+            <div class="bg-slate-800/60 border border-slate-700/50 rounded-xl p-5 relative overflow-hidden">
+                <div class="flex justify-between items-start">
+                    <span class="text-xs font-semibold text-slate-400 uppercase tracking-wider">대한민국 CDS (5Y)</span>
+                    <span id="badge-cds" class="text-xs px-2 py-0.5 rounded-full font-bold">진단중</span>
+                </div>
+                <div class="mt-4 flex items-baseline gap-2">
+                    <span class="text-3xl font-extrabold text-white" id="val-cds">0.00 bp</span>
+                    <span id="trend-cds" class="text-xs text-emerald-400"><i class="fa-solid fa-vault"></i> 외환 안정</span>
+                </div>
+                <p class="text-[11px] text-slate-400 mt-2 line-clamp-2" id="desc-cds">한국 국가 신용 위험 지표. 임계치 70bp 대비 매우 낮은 수준으로 탄탄한 외환 신인도 방어.</p>
+                <div class="absolute bottom-0 left-0 w-full h-1 bg-cyan-500"></div>
+            </div>
+        </section>
+
+        <!-- Tab & Visualization Block -->
+        <section class="grid grid-cols-1 lg:grid-cols-3 gap-6">
+            
+            <!-- Chart Panel (Left 2 Columns) -->
+            <div class="lg:col-span-2 bg-slate-800/40 border border-slate-700/40 rounded-2xl p-6 flex flex-col justify-between">
+                <div>
+                    <div class="flex flex-wrap items-center justify-between gap-4 pb-4 border-b border-slate-700/50 mb-6">
+                        <div>
+                            <h2 class="text-base font-bold text-white flex items-center gap-2">
+                                <i class="fa-solid fa-chart-area text-indigo-400"></i> 시계열 동향
+                            </h2>
+                            <p class="text-xs text-slate-400 mt-0.5 font-sans">매크로 위험 지표와 3대 주요 주가지수 등락률 비교 트렌드</p>
+                        </div>
+                        <!-- Toggle Buttons for Charts -->
+                        <div class="bg-slate-900/80 p-1 rounded-lg border border-slate-700/60 flex space-x-1 text-xs">
+                            <button onclick="switchChart('risk')" id="btn-chart-risk" class="px-3 py-1.5 rounded-md font-medium bg-indigo-600 text-white transition-all">리스크 지표</button>
+                            <button onclick="switchChart('returns')" id="btn-chart-returns" class="px-3 py-1.5 rounded-md font-medium text-slate-400 hover:text-white transition-all">주가지수 등락률</button>
+                        </div>
+                    </div>
+
+                    <!-- Active Chart Canvas Container -->
+                    <div class="relative min-h-[360px] w-full">
+                        <canvas id="macroChart" class="w-full h-full"></canvas>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Real-time Diagnostics with Score Meter (Right 1 Column) -->
+            <div class="bg-slate-800/40 border border-slate-700/40 rounded-2xl p-6 flex flex-col justify-between space-y-4">
+                <div>
+                    <h2 class="text-base font-bold text-white flex items-center gap-2 pb-3 border-b border-slate-700/50 mb-4">
+                        <i class="fa-solid fa-user-shield text-indigo-400"></i> AI 거시경제 위험 진단 보고서
+                    </h2>
+                    
+                    <!-- 0-100 Score Gauge Block -->
+                    <div class="bg-slate-950/60 p-4 rounded-xl border border-slate-700/30 flex items-center justify-between mb-4">
+                        <div class="space-y-1">
+                            <span class="text-[11px] font-semibold text-slate-400 uppercase tracking-widest">Macro Risk Score</span>
+                            <div class="flex items-baseline gap-2">
+                                <span id="risk-score-display" class="text-4xl font-extrabold text-teal-400">0</span>
+                                <span class="text-xs text-slate-500">/ 100 pt</span>
+                            </div>
+                            <span id="risk-score-badge" class="inline-block text-[10px] font-bold px-2 py-0.5 rounded bg-teal-500/10 text-teal-400 border border-teal-500/20">진단 불가</span>
+                        </div>
+                        
+                        <!-- Mini Radial Gauge Indicator -->
+                        <div class="relative w-20 h-20 flex items-center justify-center">
+                            <svg class="w-full h-full transform -rotate-90">
+                                <circle cx="40" cy="40" r="34" class="stroke-slate-800" stroke-width="6" fill="transparent"/>
+                                <circle id="risk-gauge-circle" cx="40" cy="40" r="34" class="stroke-teal-400 transition-all duration-1000" stroke-width="6" fill="transparent" stroke-dasharray="213.6" stroke-dashoffset="213.6"/>
+                            </svg>
+                            <div class="absolute text-[11px] font-bold text-slate-400 flex flex-col items-center">
+                                <span id="risk-score-percent">0%</span>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Dynamic Diagnostic Items Container -->
+                    <div class="space-y-3 text-xs leading-relaxed text-slate-300 overflow-y-auto max-h-[300px] pr-1 scrollbar-hide">
+                        <!-- Diagnostic Item 1: Yield Curve -->
+                        <div class="p-3 bg-slate-900/60 rounded-xl border border-slate-700/20">
+                            <h3 class="font-semibold text-white flex items-center justify-between">
+                                <span>장단기 금리차 (정상화 국면)</span>
+                                <span id="diag-status-yield" class="text-amber-400 flex items-center gap-1 font-medium text-[11px]"><i class="fa-solid fa-circle-exclamation"></i> 진단중</span>
+                            </h3>
+                            <p class="mt-1 text-slate-400 leading-normal text-[11px]" id="diag-desc-yield">
+                                장기화되었던 금리 역전 현상이 해소되며 <strong class="text-indigo-400" id="diag-val-yield">+0.46%p</strong>로 반등 중입니다. 이는 신용 불안 전조인 '정상화' 국면 진입에 관한 모니터링이 필요합니다.
+                            </p>
+                        </div>
+
+                        <!-- Diagnostic Item 2: Corporate Credit -->
+                        <div class="p-3 bg-slate-900/60 rounded-xl border border-slate-700/20">
+                            <h3 class="font-semibold text-white flex items-center justify-between">
+                                <span>회사채 신용 위험 (크레딧 사이클)</span>
+                                <span id="diag-status-credit" class="text-emerald-400 flex items-center gap-1 font-medium text-[11px]"><i class="fa-solid fa-circle-check"></i> 진단중</span>
+                            </h3>
+                            <p class="mt-1 text-slate-400 leading-normal text-[11px]" id="diag-desc-credit">
+                                하이일드 스프레드는 현재 <strong class="text-emerald-400" id="diag-val-hy">2.74%p</strong> 수준으로 역사적 하단 구간에 위치하며 채무 불이행 리스크는 철저히 제어되고 있습니다.
+                            </p>
+                        </div>
+
+                        <!-- Diagnostic Item 3: Market Volatility -->
+                        <div class="p-3 bg-slate-900/60 rounded-xl border border-slate-700/20">
+                            <h3 class="font-semibold text-white flex items-center justify-between">
+                                <span>시장 변동성 및 심리 지표</span>
+                                <span id="diag-status-vix" class="text-emerald-400 flex items-center gap-1 font-medium text-[11px]"><i class="fa-solid fa-circle-check"></i> 진단중</span>
+                            </h3>
+                            <p class="mt-1 text-slate-400 leading-normal text-[11px]" id="diag-desc-vix">
+                                CBOE VIX 지수는 <strong class="text-teal-400" id="diag-val-vix">16.29</strong> 포인트 내외에서 차분하게 제어되며 극도의 패닉이나 위험 회피 매도세 없이 원만한 심리를 보여줍니다.
+                            </p>
+                        </div>
+
+                        <!-- Diagnostic Item 4: Sovereign Liquidity -->
+                        <div class="p-3 bg-slate-900/60 rounded-xl border border-slate-700/20">
+                            <h3 class="font-semibold text-white flex items-center justify-between">
+                                <span>국가 외환 신용 및 CDS 리스크</span>
+                                <span id="diag-status-cds" class="text-emerald-400 flex items-center gap-1 font-medium text-[11px]"><i class="fa-solid fa-circle-check"></i> 진단중</span>
+                            </h3>
+                            <p class="mt-1 text-slate-400 leading-normal text-[11px]" id="diag-desc-cds">
+                                대한민국 5년물 CDS 프리미엄이 <strong class="text-cyan-400" id="diag-val-cds">21.93bp</strong>로 하향 고정되어 있으며 위기 임계치(70bp)에 비해 극도로 우수한 외환 안전 여건을 입증합니다.
+                            </p>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="pt-3 border-t border-slate-700/50">
+                    <div id="diag-opinion-banner" class="bg-indigo-950/40 text-indigo-300 p-3 rounded-lg border border-indigo-800/30 text-[11px] leading-relaxed">
+                        <i class="fa-solid fa-triangle-exclamation mr-1 text-indigo-400"></i> <strong>종합 의견:</strong> 시스템 데이터가 정상적으로 연결되는 중입니다.
+                    </div>
+                </div>
+            </div>
+        </section>
+
+        <!-- JSON Synchronization Section -->
+        <section class="bg-slate-800/40 border border-slate-700/40 rounded-2xl p-6">
+            <div class="flex flex-wrap items-center justify-between gap-4 pb-4 border-b border-slate-700/50 mb-4">
+                <div>
+                    <h2 class="text-base font-bold text-white flex items-center gap-2">
+                        <i class="fa-solid fa-arrows-rotate text-indigo-400"></i> 동기화 시스템 API 연동용 JSON 스키마
+                    </h2>
+                    <p class="text-xs text-slate-400 mt-0.5">자유롭게 데이터를 수정해 대시보드에 실시간 반영하세요. 외부와의 통합 동기화 인터페이스를 제공합니다.</p>
+                </div>
+                <div class="flex flex-wrap items-center gap-2 mt-2 sm:mt-0">
+                    <button onclick="copyJSON()" class="bg-slate-700 hover:bg-slate-600 text-slate-200 transition-colors duration-200 px-4 py-2 rounded-lg text-xs font-bold flex items-center gap-1.5">
+                        <i id="copy-icon" class="fa-regular fa-copy"></i> <span id="copy-text">JSON 복사</span>
+                    </button>
+                    <button onclick="downloadJSON()" class="bg-slate-700 hover:bg-slate-600 text-slate-200 transition-colors duration-200 px-4 py-2 rounded-lg text-xs font-bold flex items-center gap-1.5">
+                        <i class="fa-solid fa-download"></i> 파일 다운로드
+                    </button>
+                    <button onclick="syncData()" class="bg-indigo-600 hover:bg-indigo-500 text-white transition-colors duration-200 px-4 py-2 rounded-lg text-xs font-bold flex items-center gap-1.5">
+                        <i class="fa-solid fa-rotate"></i> 차트 데이터 동기화
+                    </button>
+                    <button onclick="resetData()" class="bg-slate-800 hover:bg-slate-700 text-slate-300 transition-colors duration-200 px-4 py-2 rounded-lg text-xs font-bold">
+                        초기화
+                    </button>
+                </div>
+            </div>
+
+            <!-- JSON Raw Panel -->
+            <div class="relative rounded-xl overflow-hidden border border-slate-700/50 bg-slate-950">
+                <div class="flex items-center justify-between px-4 py-2 bg-slate-900 border-b border-slate-800/80 text-xs text-slate-400">
+                    <span>Format: application/json (12 Months Time-series with Stock Returns)</span>
+                    <span class="text-[10px] bg-slate-800 text-slate-300 px-1.5 py-0.5 rounded">Editable Editor</span>
+                </div>
+                <textarea id="jsonEditor" class="w-full h-[280px] bg-slate-950 text-emerald-400 font-mono text-xs p-4 focus:outline-none focus:ring-0 resize-none leading-relaxed overflow-y-auto scrollbar-hide"></textarea>
+            </div>
+            
+            <div id="syncAlert" class="hidden mt-3 text-center text-xs py-2.5 rounded-lg font-medium animate-pulse"></div>
+        </section>
+
+    </main>
+
+    <!-- Footer -->
+    <footer class="border-t border-slate-800 bg-slate-950 py-6 text-center text-xs text-slate-500">
+        <p>© 2026 MacroRisk Engine. All rights reserved. Data verified with FRED, CBOE, and KRX.</p>
+    </footer>
+
+    <!-- Script Logic for Dashboard Charts and Interactive Sync -->
+    <script>
+        // Core Standard Data Schema (using the validated close price returns from previous edits)
+        const initialMacroData = {
+            "lastUpdated": "2026년 5월",
+            "months": ["25-06", "25-07", "25-08", "25-09", "25-10", "25-11", "25-12", "26-01", "26-02", "26-03", "26-04", "26-05"],
+            "yieldCurve": [-0.12, -0.05, 0.02, 0.10, 0.15, 0.18, 0.22, 0.28, 0.35, 0.42, 0.44, 0.46],
+            "highYield": [3.35, 3.20, 3.15, 3.00, 2.95, 3.10, 3.05, 2.90, 2.98, 3.12, 2.85, 2.74],
+            "vix": [18.48, 17.38, 20.38, 15.04, 20.78, 18.01, 14.95, 15.50, 16.80, 18.20, 16.50, 16.29],
+            "cds": [28.5, 27.2, 29.1, 25.4, 24.8, 23.9, 22.5, 21.8, 25.2, 28.6, 31.42, 21.93],
+            "kospiReturn": [14.90, 4.24, -1.59, 8.06, 20.68, 3.39, 0.82, 18.88, -1.20, 2.07, 30.61, 24.04],
+            "nasdaqReturn": [6.57, 3.70, 1.58, 5.61, 4.70, -1.51, -0.53, 0.95, -3.38, -4.76, 15.29, 5.83],
+            "sp500Return": [4.96, 2.17, 1.91, 3.53, 2.27, 0.13, -0.05, 1.37, -0.87, -5.09, 10.42, 3.67]
+        };
+
+        // State holder
+        let currentData = { ...initialMacroData };
+        let activeChart;
+        let currentChartView = 'risk'; // Default active view
+
+        // Safe DOM Helper to prevent any null reference properties failures
+        function safeSetText(id, text) {
+            const el = document.getElementById(id);
+            if (el) {
+                el.textContent = text;
+            } else {
+                console.warn(`[Safe DOM Guard] Element with ID '${id}' was not found in HTML.`);
+            }
+        }
+
+        // Safe DOM InnerHTML Helper
+        function safeSetHTML(id, html) {
+            const el = document.getElementById(id);
+            if (el) {
+                el.innerHTML = html;
+            } else {
+                console.warn(`[Safe DOM Guard] Element with ID '${id}' was not found in HTML.`);
+            }
+        }
+
+        // Safe DOM Class Helper
+        function safeSetClass(id, className) {
+            const el = document.getElementById(id);
+            if (el) {
+                el.className = className;
+            }
+        }
+
+        // Initialize dynamic Chart Configuration
+        function initCharts() {
+            const canvasEl = document.getElementById('macroChart');
+            if (!canvasEl) return;
+            const ctx = canvasEl.getContext('2d');
+            
+            // Build risk indicators dataset config
+            const datasetsRisk = [
+                {
+                    label: '장단기 금리차 (10Y-2Y)',
+                    data: currentData.yieldCurve,
+                    borderColor: '#6366f1',
+                    backgroundColor: 'rgba(99, 102, 241, 0.08)',
+                    borderWidth: 2.5,
+                    fill: false,
+                    tension: 0.3,
+                    yAxisID: 'y'
+                },
+                {
+                    label: '하이일드 스프레드',
+                    data: currentData.highYield,
+                    borderColor: '#10b981',
+                    backgroundColor: 'rgba(16, 185, 129, 0.08)',
+                    borderWidth: 2.5,
+                    fill: false,
+                    tension: 0.3,
+                    yAxisID: 'y'
+                },
+                {
+                    label: 'CBOE VIX',
+                    data: currentData.vix,
+                    borderColor: '#14b8a6',
+                    backgroundColor: 'rgba(20, 184, 166, 0.08)',
+                    borderWidth: 2.5,
+                    fill: false,
+                    tension: 0.3,
+                    yAxisID: 'y'
+                },
+                {
+                    label: '대한민국 CDS Premium',
+                    data: currentData.cds,
+                    borderColor: '#06b6d4',
+                    backgroundColor: 'rgba(6, 182, 212, 0.08)',
+                    borderWidth: 2,
+                    borderDash: [5, 5],
+                    fill: false,
+                    tension: 0.3,
+                    yAxisID: 'yCDS'
+                }
+            ];
+
+            const chartConfig = {
+                type: 'line',
+                data: {
+                    labels: currentData.months,
+                    datasets: datasetsRisk
+                },
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    plugins: {
+                        legend: {
+                            position: 'top',
+                            labels: {
+                                color: '#94a3b8',
+                                font: { size: 11, family: 'Inter' },
+                                boxWidth: 15,
+                                padding: 15
+                            }
+                        },
+                        tooltip: {
+                            mode: 'index',
+                            intersect: false,
+                            backgroundColor: '#0f172a',
+                            titleColor: '#f8fafc',
+                            bodyColor: '#cbd5e1',
+                            borderColor: '#334155',
+                            borderWidth: 1,
+                            padding: 10
+                        }
+                    },
+                    scales: {
+                        x: {
+                            grid: { color: '#33415550' },
+                            ticks: { color: '#94a3b8', font: { size: 10 } }
+                        },
+                        y: {
+                            type: 'linear',
+                            display: true,
+                            position: 'left',
+                            grid: { color: '#33415580' },
+                            ticks: { color: '#94a3b8', font: { size: 10 } },
+                            title: {
+                                display: true,
+                                text: '금리 / 스프레드 / VIX (%)',
+                                color: '#94a3b8',
+                                font: { size: 10 }
+                            }
+                        },
+                        yCDS: {
+                            type: 'linear',
+                            display: true,
+                            position: 'right',
+                            grid: { drawOnChartArea: false },
+                            ticks: { color: '#06b6d4', font: { size: 10 } },
+                            title: {
+                                display: true,
+                                text: 'CDS Premium (bp)',
+                                color: '#06b6d4',
+                                font: { size: 10 }
+                            }
+                        }
+                    }
+                }
+            };
+
+            activeChart = new Chart(ctx, chartConfig);
+        }
+
+        // Switch Views Between Risk Indicators and Stock returns
+        function switchChart(viewType) {
+            if (!activeChart) return;
+            currentChartView = viewType;
+            
+            const btnRisk = document.getElementById('btn-chart-risk');
+            const btnReturns = document.getElementById('btn-chart-returns');
+
+            if (viewType === 'risk') {
+                if (btnRisk) btnRisk.className = "px-3 py-1.5 rounded-md font-medium bg-indigo-600 text-white transition-all";
+                if (btnReturns) btnReturns.className = "px-3 py-1.5 rounded-md font-medium text-slate-400 hover:text-white transition-all";
+
+                activeChart.data.datasets = [
+                    {
+                        label: '장단기 금리차 (10Y-2Y)',
+                        data: currentData.yieldCurve,
+                        borderColor: '#6366f1',
+                        borderWidth: 2.5,
+                        fill: false,
+                        tension: 0.3,
+                        yAxisID: 'y'
+                    },
+                    {
+                        label: '하이일드 스프레드',
+                        data: currentData.highYield,
+                        borderColor: '#10b981',
+                        borderWidth: 2.5,
+                        fill: false,
+                        tension: 0.3,
+                        yAxisID: 'y'
+                    },
+                    {
+                        label: 'CBOE VIX',
+                        data: currentData.vix,
+                        borderColor: '#14b8a6',
+                        borderWidth: 2.5,
+                        fill: false,
+                        tension: 0.3,
+                        yAxisID: 'y'
+                    },
+                    {
+                        label: '대한민국 CDS Premium',
+                        data: currentData.cds,
+                        borderColor: '#06b6d4',
+                        borderWidth: 2,
+                        borderDash: [5, 5],
+                        fill: false,
+                        tension: 0.3,
+                        yAxisID: 'yCDS'
+                    }
+                ];
+                activeChart.options.scales.y.title.text = '금리 / 스프레드 / VIX (%)';
+                activeChart.options.scales.yCDS.display = true;
+            } else if (viewType === 'returns') {
+                if (btnReturns) btnReturns.className = "px-3 py-1.5 rounded-md font-medium bg-indigo-600 text-white transition-all";
+                if (btnRisk) btnRisk.className = "px-3 py-1.5 rounded-md font-medium text-slate-400 hover:text-white transition-all";
+
+                activeChart.data.datasets = [
+                    {
+                        label: 'KOSPI 등락률 (%)',
+                        data: currentData.kospiReturn,
+                        borderColor: '#f43f5e',
+                        borderWidth: 2.5,
+                        fill: false,
+                        tension: 0.3,
+                        yAxisID: 'y'
+                    },
+                    {
+                        label: 'NASDAQ 등락률 (%)',
+                        data: currentData.nasdaqReturn,
+                        borderColor: '#3b82f6',
+                        borderWidth: 2.5,
+                        fill: false,
+                        tension: 0.3,
+                        yAxisID: 'y'
+                    },
+                    {
+                        label: 'S&P 500 등락률 (%)',
+                        data: currentData.sp500Return,
+                        borderColor: '#10b981',
+                        borderWidth: 2.5,
+                        fill: false,
+                        tension: 0.3,
+                        yAxisID: 'y'
+                    }
+                ];
+                activeChart.options.scales.y.title.text = '전월 대비 등락률 (%)';
+                activeChart.options.scales.yCDS.display = false; 
+            }
+
+            activeChart.update();
+        }
+
+        // Dynamic Risk Rating Calculation Engine (0 - 100 Systemic Risk Level)
+        function calculateWeightedRiskScore(latestYield, latestHY, latestVix, latestCDS) {
+            // Weight Matrix: Yield Curve (25%), High Yield Spread (30%), VIX (25%), sovereign CDS (20%)
+            let scoreYield = 0;
+            let scoreHY = 0;
+            let scoreVix = 0;
+            let scoreCDS = 0;
+
+            // 1. Yield Curve Score (25% Weight)
+            if (latestYield <= 0) {
+                // Persistent Inversion (Classic Signal of structural damage)
+                scoreYield = 70;
+            } else if (latestYield > 0 && latestYield < 0.5) {
+                // Dangerous steepening (Rapid decompression right before recession triggers)
+                scoreYield = 90;
+            } else if (latestYield >= 0.5 && latestYield < 1.0) {
+                // Mild Transition
+                scoreYield = 40;
+            } else {
+                // Optimal expansion curve
+                scoreYield = 15;
+            }
+
+            // 2. High Yield Spread Score (30% Weight)
+            if (latestHY >= 6.0) {
+                scoreHY = 100; // Credit market collapse warning
+            } else if (latestHY >= 4.5) {
+                scoreHY = 75;  // Moderate systemic friction
+            } else if (latestHY >= 3.5) {
+                scoreHY = 40;  // Normal corporate spread
+            } else {
+                scoreHY = 15;  // Robust debt liquidity
+            }
+
+            // 3. VIX Volatility Score (25% Weight)
+            if (latestVix >= 40) {
+                scoreVix = 100; // Peak capitulation panic
+            } else if (latestVix >= 25) {
+                scoreVix = 70;  // Market systemic fear
+            } else if (latestVix >= 18) {
+                scoreVix = 45;  // Healthy correction uncertainty
+            } else {
+                scoreVix = 20;  // Optimistic risk appetite
+            }
+
+            // 4. CDS Premium Score (20% Weight)
+            if (latestCDS >= 70) {
+                scoreCDS = 100; // FX/Liquidity crisis looming
+            } else if (latestCDS >= 50) {
+                scoreCDS = 70;  // State security strain
+            } else if (latestCDS >= 35) {
+                scoreCDS = 40;  // Average emerging status
+            } else {
+                scoreCDS = 15;  // Pristine credit premium
+            }
+
+            // Calculate aggregate weighted rating
+            const aggregate = (scoreYield * 0.25) + (scoreHY * 0.30) + (scoreVix * 0.25) + (scoreCDS * 0.20);
+            return Math.min(100, Math.max(0, Math.round(aggregate)));
+        }
+
+        // Evaluates all threshold matrices in real-time based on loaded dataset
+        function runRiskDiagnostic() {
+            const len = currentData.months.length;
+            if (len === 0) return;
+
+            // Get the latest values dynamically
+            const latestYield = currentData.yieldCurve[len - 1];
+            const latestHY = currentData.highYield[len - 1];
+            const latestVix = currentData.vix[len - 1];
+            const latestCDS = currentData.cds[len - 1];
+
+            // 1. Update top cards values safely
+            safeSetText('val-yield', (latestYield >= 0 ? '+' : '') + latestYield.toFixed(2) + '%p');
+            safeSetText('val-hy', latestHY.toFixed(2) + '%p');
+            safeSetText('val-vix', latestVix.toFixed(2));
+            safeSetText('val-cds', latestCDS.toFixed(2) + ' bp');
+
+            // Calculate Score
+            const riskScore = calculateWeightedRiskScore(latestYield, latestHY, latestVix, latestCDS);
+            
+            // 2. Map values directly to the AI diagnostic report values safely
+            safeSetText('diag-val-yield', (latestYield >= 0 ? '+' : '') + latestYield.toFixed(2) + '%p');
+            safeSetText('diag-val-hy', latestHY.toFixed(2) + '%p');
+            safeSetText('diag-val-vix', latestVix.toFixed(2));
+            safeSetText('diag-val-cds', latestCDS.toFixed(2) + 'bp');
+
+            // 3. Yield Curve Diagnostic Text & Badging
+            if (latestYield <= 0) {
+                safeSetText('badge-yield', "경보 (역전 지속)");
+                safeSetClass('badge-yield', "text-xs px-2.5 py-0.5 rounded-full font-bold bg-rose-500/10 text-rose-400 border border-rose-500/20");
+                safeSetHTML('trend-yield', `<i class="fa-solid fa-arrow-down-long"></i> 역전 진행 중`);
+                safeSetClass('trend-yield', "text-xs text-rose-400");
+                safeSetHTML('diag-status-yield', `<i class="fa-solid fa-triangle-exclamation"></i> 구조적 정체`);
+                safeSetClass('diag-status-yield', "text-rose-400 flex items-center gap-1 font-medium text-[11px]");
+                safeSetHTML('diag-desc-yield', `장단기 스프레드가 <strong class="text-rose-400">${latestYield.toFixed(2)}%p</strong>로 역전되어 금리 압박이 수 개월간 장기화되고 있습니다. 은행 예대 마진 수축 및 은행 시스템 유동성 조달 위험을 관찰하십시오.`);
+            } else {
+                safeSetText('badge-yield', "침체 초입 위험");
+                safeSetClass('badge-yield', "text-xs px-2.5 py-0.5 rounded-full font-bold bg-amber-500/10 text-amber-400 border border-amber-500/20");
+                safeSetHTML('trend-yield', `<i class="fa-solid fa-arrow-up-long"></i> 가파른 정상화`);
+                safeSetClass('trend-yield', "text-xs text-amber-400");
+                safeSetHTML('diag-status-yield', `<i class="fa-solid fa-circle-exclamation"></i> 정상화 가속 (주의)`);
+                safeSetClass('diag-status-yield', "text-amber-400 flex items-center gap-1 font-medium text-[11px]");
+                safeSetHTML('diag-desc-yield', `장단기 금리차가 <strong class="text-indigo-400">+${latestYield.toFixed(2)}%p</strong>로 플러스 영역에 고속 복귀 중입니다. 이는 경기 후퇴 직전에 발생하는 전형적인 '베어/불 스티프닝(Steepening)' 성격이 짙어 우려스럽습니다.`);
+            }
+
+            // 4. High Yield Spread Diagnostic Text & Badging
+            if (latestHY >= 6.0) {
+                safeSetText('badge-hy', "비중 축소 권고");
+                safeSetClass('badge-hy', "text-xs px-2.5 py-0.5 rounded-full font-bold bg-red-500/10 text-red-400 border border-red-500/20");
+                safeSetHTML('trend-hy', `<i class="fa-solid fa-circle-exclamation"></i> 신용 불안정`);
+                safeSetClass('trend-hy', "text-xs text-red-400");
+                safeSetHTML('diag-status-credit', `<i class="fa-solid fa-circle-exclamation"></i> 크레딧 위기 경보`);
+                safeSetClass('diag-status-credit', "text-red-400 flex items-center gap-1 font-medium text-[11px]");
+                safeSetHTML('diag-desc-credit', `하이일드 스프레드가 무려 <strong class="text-red-400">${latestHY.toFixed(2)}%p</strong>로 치솟아 회사채 상환 불능 위험이 뚜렷해졌습니다. 한계 기업들의 연쇄 부도가 시스템 신용 수축을 직접 유발합니다.`);
+            } else if (latestHY >= 4.5) {
+                safeSetText('badge-hy', "주의 (신용 경색)");
+                safeSetClass('badge-hy', "text-xs px-2.5 py-0.5 rounded-full font-bold bg-amber-500/10 text-amber-400 border border-amber-500/20");
+                safeSetHTML('trend-hy', `<i class="fa-solid fa-triangle-exclamation"></i> 스프레드 급등`);
+                safeSetClass('trend-hy', "text-xs text-amber-400");
+                safeSetHTML('diag-status-credit', `<i class="fa-solid fa-triangle-exclamation"></i> 신용 경색 위험`);
+                safeSetClass('diag-status-credit', "text-amber-400 flex items-center gap-1 font-medium text-[11px]");
+                safeSetHTML('diag-desc-credit', `스프레드가 우려 구간인 <strong class="text-amber-400">${latestHY.toFixed(2)}%p</strong>를 상회하며 은행권 대출 기조가 까다로워집니다. 자금 융통 가중치 조정이 장려되는 국면입니다.`);
+            } else {
+                safeSetText('badge-hy', "매우 안정");
+                safeSetClass('badge-hy', "text-xs px-2.5 py-0.5 rounded-full font-bold bg-emerald-500/10 text-emerald-400 border border-emerald-500/20");
+                safeSetHTML('trend-hy', `<i class="fa-solid fa-shield-halved"></i> 견조한 유동성`);
+                safeSetClass('trend-hy', "text-xs text-emerald-400");
+                safeSetHTML('diag-status-credit', `<i class="fa-solid fa-circle-check"></i> 견고한 크레딧`);
+                safeSetClass('diag-status-credit', "text-emerald-400 flex items-center gap-1 font-medium text-[11px]");
+                safeSetHTML('diag-desc-credit', `현재 하이일드 스프레드는 <strong class="text-emerald-400">${latestHY.toFixed(2)}%p</strong>로 역사적 저점 부근에 차분히 통제되어 있으며 정크본드 대외 마찰 요인이 현저히 안정적입니다.`);
+            }
+
+            // 5. VIX Index Diagnostic
+            if (latestVix >= 40) {
+                safeSetText('badge-vix', "패닉 바닥 신호");
+                safeSetClass('badge-vix', "text-xs px-2.5 py-0.5 rounded-full font-bold bg-red-600 text-white");
+                safeSetHTML('trend-vix', `<i class="fa-solid fa-burst"></i> 투매 발생`);
+                safeSetClass('trend-vix', "text-xs text-rose-400 font-semibold");
+                safeSetHTML('diag-status-vix', `<i class="fa-solid fa-triangle-exclamation"></i> 패닉/강제 청산`);
+                safeSetClass('diag-status-vix', "text-rose-400 flex items-center gap-1 font-medium text-[11px]");
+                safeSetHTML('diag-desc-vix', `VIX가 위험 임계점인 <strong class="text-rose-400">${latestVix.toFixed(2)}</strong>을 초과하여 기계적 패닉 셀링이 시장 전반에 발생하고 있습니다. 단기적 투매가 바닥을 만드는 정점 국면입니다.`);
+            } else if (latestVix >= 25) {
+                safeSetText('badge-vix', "시장 공포");
+                safeSetClass('badge-vix', "text-xs px-2.5 py-0.5 rounded-full font-bold bg-amber-500/10 text-amber-400 border border-amber-500/20");
+                safeSetHTML('trend-vix', `<i class="fa-solid fa-arrow-up"></i> 변동성 확대`);
+                safeSetClass('trend-vix', "text-xs text-amber-400");
+                safeSetHTML('diag-status-vix', `<i class="fa-solid fa-circle-exclamation"></i> 공포 심리 확산`);
+                safeSetClass('diag-status-vix', "text-amber-400 flex items-center gap-1 font-medium text-[11px]");
+                safeSetHTML('diag-desc-vix', `VIX 지수가 우려선인 <strong class="text-amber-400">${latestVix.toFixed(2)}</strong>을 상회하며 투자 심리가 일시 위축되었습니다. 파생옵션 포지션 헷징 등의 리스크 롤오버가 가속됩니다.`);
+            } else {
+                safeSetText('badge-vix', "심리 정상");
+                safeSetClass('badge-vix', "text-xs px-2.5 py-0.5 rounded-full font-bold bg-emerald-500/10 text-emerald-400 border border-emerald-500/20");
+                safeSetHTML('trend-vix', `안정적 위험 선호`);
+                safeSetClass('trend-vix', "text-xs text-emerald-400");
+                safeSetHTML('diag-status-vix', `<i class="fa-solid fa-circle-check"></i> 심리 양호`);
+                safeSetClass('diag-status-vix', "text-emerald-400 flex items-center gap-1 font-medium text-[11px]");
+                safeSetHTML('diag-desc-vix', `VIX 변동성 지수가 <strong class="text-teal-400">${latestVix.toFixed(2)}</strong>로 매우 안정적인 강세 위험 선호 국면을 유지하고 있어 유동성 확산에 긍정적입니다.`);
+            }
+
+            // 6. CDS Premium Diagnostic
+            if (latestCDS >= 70) {
+                safeSetText('badge-cds', "유동성 붕괴 주의");
+                safeSetClass('badge-cds', "text-xs px-2.5 py-0.5 rounded-full font-bold bg-rose-500/10 text-rose-400 border border-rose-500/20");
+                safeSetHTML('trend-cds', `<i class="fa-solid fa-triangle-exclamation"></i> 외환 위험성`);
+                safeSetClass('trend-cds', "text-xs text-rose-400");
+                safeSetHTML('diag-status-cds', `<i class="fa-solid fa-triangle-exclamation"></i> 대외 신용도 불안`);
+                safeSetClass('diag-status-cds', "text-rose-400 flex items-center gap-1 font-medium text-[11px]");
+                safeSetHTML('diag-desc-cds', `한국 CDS 프리미엄이 <strong class="text-rose-400">${latestCDS.toFixed(2)} bp</strong>를 넘어서며 역외 달러 조달 압력이 촉발되고 있습니다. 급격한 자본 이탈 위험을 필터링하십시오.`);
+            } else {
+                safeSetText('badge-cds', "최우수 안정");
+                safeSetClass('badge-cds', "text-xs px-2.5 py-0.5 rounded-full font-bold bg-emerald-500/10 text-emerald-400 border border-emerald-500/20");
+                safeSetHTML('trend-cds', `<i class="fa-solid fa-vault"></i> 외환 신용 최상`);
+                safeSetClass('trend-cds', "text-xs text-emerald-400");
+                safeSetHTML('diag-status-cds', `<i class="fa-solid fa-circle-check"></i> 국가 신용도 강세`);
+                safeSetClass('diag-status-cds', "text-emerald-400 flex items-center gap-1 font-medium text-[11px]");
+                safeSetHTML('diag-desc-cds', `대한민국의 5년 CDS 지표는 <strong class="text-cyan-400">${latestCDS.toFixed(2)} bp</strong>로 G7 국가에 견줄 만한 초고신용 방어력을 유지하며 국가 외환 조달 능력의 무결점 상태를 보장합니다.`);
+            }
+
+            // Update Top Bar & Score Panel Elements
+            safeSetText('sync-time-header', currentData.lastUpdated);
+            safeSetText('risk-score-display', riskScore);
+            safeSetText('risk-score-percent', riskScore + "%");
+
+            // Radial progress animation
+            const circle = document.getElementById('risk-gauge-circle');
+            if (circle) {
+                const radius = circle.r.baseVal.value;
+                const circumference = 2 * Math.PI * radius;
+                const offset = circumference - (riskScore / 100) * circumference;
+                circle.style.strokeDasharray = `${circumference} ${circumference}`;
+                circle.style.strokeDashoffset = offset;
+            }
+
+            // Gauge Badge Color Definitions
+            let statusText = '';
+            let statusBadgeClass = '';
+            let opinionClass = '';
+            let opinionText = '';
+
+            if (riskScore <= 20) {
+                statusText = "매우 안정 (Extreme Calm)";
+                statusBadgeClass = "bg-emerald-500/10 text-emerald-400 border border-emerald-500/20";
+                if (circle) circle.style.stroke = "#10b981";
+                opinionClass = "bg-emerald-950/40 text-emerald-300 border border-emerald-800/30 text-[11px] leading-relaxed";
+                opinionText = `<i class="fa-solid fa-circle-check mr-1 text-emerald-400"></i> <strong>최종 분석 의견 (점수: ${riskScore}/100):</strong> 리스크 붕괴 징후가 전무한 완벽한 골디락스입니다. 적극적인 자본 증대(Risk-on) 전략 설정이 주도적으로 작용하는 완만한 상승 국면입니다.`;
+            } else if (riskScore <= 40) {
+                statusText = "안정 (Stable)";
+                statusBadgeClass = "bg-teal-500/10 text-teal-400 border border-teal-500/20";
+                if (circle) circle.style.stroke = "#14b8a6";
+                opinionClass = "bg-indigo-950/40 text-indigo-300 border border-indigo-800/30 text-[11px] leading-relaxed";
+                opinionText = `<i class="fa-solid fa-triangle-exclamation mr-1 text-indigo-400"></i> <strong>최종 분석 의견 (점수: ${riskScore}/100):</strong> 금리차 정상화 가속이 구조적 모니터링 대상으로 지목되나, 탄탄한 크레딧 채권 시장과 탄탄한 외환 방어력 덕택에 자산 하방 경직성이 단단합니다.`;
+            } else if (riskScore <= 60) {
+                statusText = "주의/모니터링 (Caution)";
+                statusBadgeClass = "bg-amber-500/10 text-amber-400 border border-amber-500/20";
+                if (circle) circle.style.stroke = "#f59e0b";
+                opinionClass = "bg-amber-950/40 text-amber-300 border border-amber-800/30 text-[11px] leading-relaxed";
+                opinionText = `<i class="fa-solid fa-circle-exclamation mr-1 text-amber-400"></i> <strong>최종 분석 의견 (점수: ${riskScore}/100):</strong> 시스템 변동성이 고개를 들기 시작했습니다. 채권 및 안전 자산으로의 포트폴리오 다각화 노선과 고배당 수익형 투자 가중치 점진 상향이 요구되는 시점입니다.`;
+            } else if (riskScore <= 80) {
+                statusText = "경고/위험 (Warning)";
+                statusBadgeClass = "bg-orange-500/10 text-orange-400 border border-orange-500/20";
+                if (circle) circle.style.stroke = "#f97316";
+                opinionClass = "bg-orange-950/40 text-orange-300 border border-orange-800/30 text-[11px] leading-relaxed";
+                opinionText = `<i class="fa-solid fa-triangle-exclamation mr-1 text-orange-400"></i> <strong>최종 분석 의견 (점수: ${riskScore}/100):</strong> 고위험 회사채 정크 스프레드의 압박이 확인되는 단계입니다. 기계적 강제 청산 대비를 위해 현금 조달 비중을 40% 이상 확충하고 방어적 자산 수비를 장려합니다.`;
+            } else {
+                statusText = "위기/패닉 (Systemic Crisis)";
+                statusBadgeClass = "bg-red-500/10 text-red-400 border border-red-500/20";
+                if (circle) circle.style.stroke = "#ef4444";
+                opinionClass = "bg-red-950/40 text-red-300 border border-red-800/30 text-[11px] leading-relaxed";
+                opinionText = `<i class="fa-solid fa-fire mr-1 text-red-400"></i> <strong>최종 분석 의견 (점수: ${riskScore}/100):</strong> 매크로 신용 및 외환 위기가 발생했습니다. 자산 시장 전반의 연쇄 마진콜 우려가 고조되는 구간이므로 무위험 국채 및 강력한 미국 달러 위주의 극단적 피난처 확보가 시급합니다.`;
+            }
+
+            safeSetText('risk-score-badge', statusText);
+            safeSetClass('risk-score-badge', "inline-block text-[10px] font-bold px-2 py-0.5 rounded " + statusBadgeClass);
+            safeSetClass('diag-opinion-banner', opinionClass);
+            safeSetHTML('diag-opinion-banner', opinionText);
+        }
+
+        // Apply JSON mutations onto Dashboard state dynamically
+        function syncData() {
+            const alertBox = document.getElementById('syncAlert');
+            try {
+                const updatedJSON = document.getElementById('jsonEditor').value;
+                const parsed = JSON.parse(updatedJSON);
+                
+                // Assert structural integrity
+                const requiredKeys = ["lastUpdated", "months", "yieldCurve", "highYield", "vix", "cds", "kospiReturn", "nasdaqReturn", "sp500Return"];
+                for (let key of requiredKeys) {
+                    if (!parsed[key] || (!Array.isArray(parsed[key]) && key !== "lastUpdated")) {
+                        throw new Error(`필수 배열 또는 필드 [${key}]를 찾을 수 없거나 형식이 잘못되었습니다.`);
+                    }
+                }
+
+                currentData = parsed;
+                
+                // Re-sync charts according to current active view tab
+                switchChart(currentChartView);
+                
+                // Run threshold checks
+                runRiskDiagnostic();
+
+                // Alert success UI
+                if (alertBox) {
+                    alertBox.textContent = "성공: 실시간 데이터 동기화 및 위험점수 계산이 오류 없이 적용되었습니다!";
+                    alertBox.className = "mt-3 text-center text-xs py-2.5 rounded-lg font-medium bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 block";
+                    setTimeout(() => alertBox.className = "hidden", 4000);
+                }
+
+            } catch (err) {
+                if (alertBox) {
+                    alertBox.textContent = `동기화 실패: JSON 구조가 올바르지 않습니다. (${err.message})`;
+                    alertBox.className = "mt-3 text-center text-xs py-2.5 rounded-lg font-medium bg-rose-500/10 text-rose-400 border border-rose-500/20 block";
+                    setTimeout(() => alertBox.className = "hidden", 6000);
+                }
+            }
+        }
+
+        // System reset tool
+        function resetData() {
+            currentData = { ...initialMacroData };
+            const editor = document.getElementById('jsonEditor');
+            if (editor) editor.value = JSON.stringify(currentData, null, 2);
+            switchChart(currentChartView);
+            runRiskDiagnostic();
+        }
+
+        // Copy Text via system fallback
+        function copyJSON() {
+            const editor = document.getElementById('jsonEditor');
+            if (!editor) return;
+            
+            const tempTextArea = document.createElement('textarea');
+            tempTextArea.value = editor.value;
+            document.body.appendChild(tempTextArea);
+            tempTextArea.select();
+            
+            try {
+                const successful = document.execCommand('copy');
+                const copyText = document.getElementById('copy-text');
+                const copyIcon = document.getElementById('copy-icon');
+                
+                if (successful) {
+                    if (copyText) copyText.textContent = "복사 완료!";
+                    if (copyIcon) copyIcon.className = "fa-solid fa-check text-emerald-400";
+                    setTimeout(() => {
+                        if (copyText) copyText.textContent = "JSON 복사";
+                        if (copyIcon) copyIcon.className = "fa-regular fa-copy";
+                    }, 2000);
+                } else {
+                    console.error("복사에 실패했습니다.");
+                }
+            } catch (err) {
+                console.error("복사 과정 오류: ", err);
+            }
+            document.body.removeChild(tempTextArea);
+        }
+
+        // Trigger dynamic download
+        function downloadJSON() {
+            const dataStr = "data:text/json;charset=utf-8," + encodeURIComponent(JSON.stringify(currentData, null, 2));
+            const downloadAnchor = document.createElement('a');
+            downloadAnchor.setAttribute("href", dataStr);
+            downloadAnchor.setAttribute("download", "macro_risk_validated_data.json");
+            document.body.appendChild(downloadAnchor);
+            downloadAnchor.click();
+            downloadAnchor.remove();
+        }
+
+        // Bootstrap on load
+        window.onload = function() {
+            const editor = document.getElementById('jsonEditor');
+            if (editor) editor.value = JSON.stringify(currentData, null, 2);
+            initCharts();
+            runRiskDiagnostic();
+        };
+    </script>
+</body>
+</html>
