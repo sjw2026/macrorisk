@@ -1,0 +1,103 @@
+function updateCalendarDashboard() {
+  var ss = SpreadsheetApp.getActiveSpreadsheet();
+  
+  // 1. 시트가 없으면 생성, 있으면 가져오기
+  var dataSheet = ss.getSheetByName("캘린더데이터");
+  if (!dataSheet) dataSheet = ss.insertSheet("캘린더데이터");
+  
+  var dashSheet = ss.getSheetByName("월별추이_대시보드");
+  if (!dashSheet) dashSheet = ss.insertSheet("월별추이_대시보드");
+  
+  // 시트 초기화
+  dataSheet.clear();
+  dashSheet.clear();
+  
+  // 헤더 설정
+  dataSheet.appendRow(["년월", "술", "독서", "무알콜", "영어"]);
+  
+  // 2. 캘린더 데이터 가져오기 (2024년 1월 1일부터 현재까지)
+  var targetKeywords = ["술", "독서", "무알콜", "영어"];
+  var startDate = new Date("2024-01-01T00:00:00");
+  var endDate = new Date(); 
+  
+  var calendar = CalendarApp.getDefaultCalendar();
+  var events = calendar.getEvents(startDate, endDate);
+  
+  var monthlyData = {};
+  
+  events.forEach(function(event) {
+    var title = event.getTitle().trim();
+    if (targetKeywords.includes(title)) {
+      var eventDate = event.getStartTime();
+      var yearMonth = Utilities.formatDate(eventDate, Session.getScriptTimeZone(), "yyyy-MM");
+      
+      if (!monthlyData[yearMonth]) {
+        monthlyData[yearMonth] = { "술": 0, "독서": 0, "무알콜": 0, "영어": 0 };
+      }
+      monthlyData[yearMonth][title]++;
+    }
+  });
+  
+  // 데이터 시트에 정렬하여 입력
+  var sortedMonths = Object.keys(monthlyData).sort();
+  
+  // 만약 캘린더에 데이터가 하나도 없다면 실행 중단
+  if (sortedMonths.length === 0) {
+    dashSheet.appendRow(["캘린더에 일치하는 데이터가 없습니다."]);
+    return;
+  }
+  
+  sortedMonths.forEach(function(month) {
+    dataSheet.appendRow([
+      month,
+      monthlyData[month]["술"],
+      monthlyData[month]["독서"],
+      monthlyData[month]["무알콜"],
+      monthlyData[month]["영어"]
+    ]);
+  });
+  
+  dataSheet.getRange(1, 1, 1, 5).setFontWeight("bold").setBackground("#f3f3f3");
+  
+  // 3. 대시보드 시트 구성 (추이 및 평균치 수식 연동)
+  dashSheet.appendRow(["월별 추이 데이터 (2024~)", "", "", "", ""]);
+  dashSheet.appendRow(["년월", "술 (일수)", "독서 (일수)", "무알콜 (일수)", "영어 (일수)"]);
+  
+  // [수정 포인트] 실제 데이터 행 수(dataRowsCount)만큼만 수식 범위를 지정합니다.
+  var dataRowsCount = sortedMonths.length; 
+  
+  // 2행이 헤더이므로 데이터는 3행부터 시작
+  var startRow = 3; 
+  
+  // 각 행에 맞는 수식을 배열로 생성
+  var formulaArray = [];
+  for (var i = 0; i < dataRowsCount; i++) {
+    var dataRowIndex = i + 2; // '캘린더데이터' 시트의 참조할 행 번호 (2행부터 시작)
+    formulaArray.push([
+      "=캘린더데이터!A" + dataRowIndex,
+      "=캘린더데이터!B" + dataRowIndex,
+      "=캘린더데이터!C" + dataRowIndex,
+      "=캘린더데이터!D" + dataRowIndex,
+      "=캘린더데이터!E" + dataRowIndex
+    ]);
+  }
+  
+  // 정확히 데이터 개수만큼만 범위를 잡아서 수식 입력
+  dashSheet.getRange(startRow, 1, dataRowsCount, 5).setFormulas(formulaArray);
+  
+  // 4. 평균치 계산 행 추가 (데이터 바로 다음 행에 삽입)
+  var avgRowIndex = startRow + dataRowsCount;
+  var lastDataRow = avgRowIndex - 1;
+  
+  dashSheet.getRange(avgRowIndex, 1).setValue("월평균 수치").setFontWeight("bold");
+  dashSheet.getRange(avgRowIndex, 2).setValue("=AVERAGE(B3:B" + lastDataRow + ")");
+  dashSheet.getRange(avgRowIndex, 3).setValue("=AVERAGE(C3:C" + lastDataRow + ")");
+  dashSheet.getRange(avgRowIndex, 4).setValue("=AVERAGE(D3:D" + lastDataRow + ")");
+  dashSheet.getRange(avgRowIndex, 5).setValue("=AVERAGE(E3:E" + lastDataRow + ")");
+  dashSheet.getRange(avgRowIndex, 2, 1, 4).setFontWeight("bold").setNumberFormat("0.0일");
+  
+  // 대시보드 스타일링
+  dashSheet.getRange(1, 1, 1, 5).merge().setFontSize(14).setFontWeight("bold");
+  dashSheet.getRange(2, 1, 1, 5).setFontWeight("bold").setBackground("#e6effa");
+  dashSheet.getRange(avgRowIndex, 1, 1, 5).setBackground("#f5f5f5");
+}
