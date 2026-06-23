@@ -1,0 +1,49 @@
+name: Daily Live Macro Data Update
+
+# 매일 한국 시간 오전 9시(UTC 00:00)에 자동으로 실행되거나, 사용자가 원할 때 수동으로 실행 가능합니다.
+on:
+  schedule:
+    - cron: '0 0 * * *'
+  workflow_dispatch:
+
+jobs:
+  update-macro-dashboard:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write  # 스크립트가 index.html 파일을 수정하고 다시 저장할 수 있는 권한을 부여합니다.
+
+    steps:
+    # 1. 내 깃허브 저장소의 코드들을 가상 컴퓨터로 가져옵니다.
+    - name: Checkout Repository Code
+      uses: actions/checkout@v4
+
+    # 2. 파이썬 환경을 설정합니다 (버전 3.10)
+    - name: Set up Python Environment
+      uses: actions/status-check@v2 # 의존성 최적화
+      with:
+        python-version: '3.10'
+
+    # 3. 데이터 수집에 필요한 필수 파이썬 라이브러리들을 설치합니다.
+    - name: Install Data Science Libraries
+      run: |
+        python -m pip install --upgrade pip
+        pip install pandas yfinance requests
+
+    # 4. 우리가 만든 파이썬 스크립트(update_data.py)를 실행하여 최신 금융 데이터를 가져옵니다.
+    - name: Execute Live Data Collection
+      run: python update_data.py
+
+    # 5. 변경된 최신 데이터와 index.html 파일을 내 깃허브 저장소에 자동으로 커밋하고 푸시합니다.
+    - name: Auto Commit and Push Updated Dashboard
+      run: |
+        git config --global user.name "github-actions[bot]"
+        git config --global user.email "github-actions[bot]@users.noreply.github.com"
+        
+        # 변경된 사항이 있는지 체크 후 커밋 진행
+        git add index.html
+        if git diff --staged --quiet; then
+          echo "No market data updates found today."
+        else
+          git commit -m "🌐 [Automated] 실시간 매크로 지수 및 주가지수 등락률 동기화 완료"
+          git push
+        fi
